@@ -1,0 +1,6 @@
+.wc-ro-safe-msg{margin-top:8px;padding:8px 12px;border-radius:4px;font-size:13px}
+.wc-ro-safe-success{background:#e7f7ed;border-left:3px solid #00a32a;color:#00761a}
+.wc-ro-safe-warning{background:#fff8e5;border-left:3px solid #dba617;color:#8a6d00}
+.wc-ro-safe-info{background:#f0f6fc;border-left:3px solid #2271b1;color:#135e96}
+.wc-ro-safe-loading{background-image:linear-gradient(90deg, rgba(0,0,0,0.04) 0%, rgba(0,0,0,0.08) 50%, rgba(0,0,0,0.04) 100%);background-size:200% 100%;animation:wcrosafeload 1.2s infinite}
+@keyframes wcrosafeload{0%{background-position:0% 0%}100%{background-position:200% 0%}}
