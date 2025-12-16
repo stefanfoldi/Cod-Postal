@@ -43,8 +43,20 @@ final class WC_RO_Validator_Safe_114 {
     }
 
     public function register_settings() {
-        register_setting('wc_ro_validator_safe', self::OPT_API_KEY);
-        register_setting('wc_ro_validator_safe', self::OPT_LOGGING);
+        register_setting(
+            'wc_ro_validator_safe',
+            self::OPT_API_KEY,
+            array('sanitize_callback' => 'sanitize_text_field')
+        );
+        register_setting(
+            'wc_ro_validator_safe',
+            self::OPT_LOGGING,
+            array('sanitize_callback' => array($this, 'sanitize_logging_option'))
+        );
+    }
+
+    public function sanitize_logging_option($value) {
+        return (int) (bool) $value;
     }
 
     public function settings_page() {
@@ -231,14 +243,14 @@ final class WC_RO_Validator_Safe_114 {
         check_ajax_referer('wc_ro_safe_nonce', 'nonce');
 
         $city_in  = isset($_POST['city']) ? sanitize_text_field(wp_unslash($_POST['city'])) : '';
-        \1
-
-
-// Map WooCommerce RO state codes (e.g., TM) to county names for InfoCUI
-if ($state_in !== '' && strlen($state_in) <= 3) {
-    $mapped = $this->map_ro_state_to_county($state_in);
-    if ($mapped !== '') $state_in = $mapped;
-}
+        $state_in = isset($_POST['state']) ? sanitize_text_field(wp_unslash($_POST['state'])) : '';
+        // Map WooCommerce RO state codes (e.g., TM) to county names for InfoCUI
+        if ($state_in !== '' && strlen($state_in) <= 3) {
+            $mapped = $this->map_ro_state_to_county($state_in);
+            if ($mapped !== '') {
+                $state_in = $mapped;
+            }
+        }
         $addr1    = isset($_POST['addr1']) ? sanitize_text_field(wp_unslash($_POST['addr1'])) : '';
         $addr2    = isset($_POST['addr2']) ? sanitize_text_field(wp_unslash($_POST['addr2'])) : '';
 
@@ -364,26 +376,27 @@ if ($state_in !== '' && strlen($state_in) <= 3) {
         return $codes;
     }
 
+    private function map_ro_state_to_county($state_value) {
+        $state_value = strtoupper(trim((string) $state_value));
+        if ($state_value === '') return '';
+        // If already looks like a name, return as-is
+        if (strlen($state_value) > 3) return $state_value;
 
-private function map_ro_state_to_county($state_value) {
-    $state_value = strtoupper(trim((string)$state_value));
-    if ($state_value === '') return '';
-    // If already looks like a name, return as-is
-    if (strlen($state_value) > 3) return $state_value;
-
-    try {
-        if (function_exists('WC') && WC() && isset(WC()->countries)) {
-            $states = WC()->countries->get_states('RO');
-            if (is_array($states) && isset($states[$state_value])) {
-                // Example: 'TM' => 'Timiș'
-                return (string) $states[$state_value];
+        try {
+            if (function_exists('WC') && WC() && isset(WC()->countries)) {
+                $states = WC()->countries->get_states('RO');
+                if (is_array($states) && isset($states[$state_value])) {
+                    // Example: 'TM' => 'Timiș'
+                    return (string) $states[$state_value];
+                }
             }
+        } catch (Exception $e) {
+            // ignore
         }
-    } catch (Exception $e) {
-        // ignore
+        return $state_value; // fallback
     }
-    return $state_value; // fallback
-}    private function infocui_request($params, $endpoint) {
+
+    private function infocui_request($params, $endpoint) {
         $key = (string) get_option(self::OPT_API_KEY, '');
         if ($key === '') return false;
 
