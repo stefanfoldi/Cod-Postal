@@ -1,0 +1,408 @@
++<?php
++/**
++ * Plugin Name: WooCommerce RO Validator (Safe)
++ * Description: PF/PJ (fără CNP), preluare date firmă din InfoCUI, sugestii cod poștal fără blocarea comenzii + log comenzi cu probleme.
++ * Version: 1.0.8
++ * Author: Programare
++ * Text Domain: wc-ro-validator-safe
++ */
++
++if (!defined('ABSPATH')) exit;
++
++final class WC_RO_Validator_Safe {
++
++    const OPT_API_KEY = 'wc_ro_validator_api_key';
++    const OPT_LOGGING = 'wc_ro_validator_enable_logging';
++
++    private string $api_base = 'https://www.infocui.ro/system/api/';
++
++    public function __construct() {
++        add_action('admin_menu', [$this, 'admin_menu']);
++        add_action('admin_init', [$this, 'register_settings']);
++
++        add_filter('woocommerce_checkout_fields', [$this, 'checkout_fields']);
++        add_action('wp_enqueue_scripts', [$this, 'enqueue']);
++
++        add_action('wp_ajax_wc_ro_safe_get_company', [$this, 'ajax_get_company']);
++        add_action('wp_ajax_nopriv_wc_ro_safe_get_company', [$this, 'ajax_get_company']);
++
++        add_action('wp_ajax_wc_ro_safe_get_postcodes', [$this, 'ajax_get_postcodes']);
++        add_action('wp_ajax_nopriv_wc_ro_safe_get_postcodes', [$this, 'ajax_get_postcodes']);
++
++        add_action('woocommerce_checkout_update_order_meta', [$this, 'save_order_meta']);
++        add_action('woocommerce_checkout_order_processed', [$this, 'log_validation_issues'], 10, 3);
++    }
++
++    public function admin_menu() {
++        add_submenu_page('woocommerce', 'RO Validator (Safe)', 'RO Validator (Safe)', 'manage_woocommerce', 'wc-ro-validator-safe', [$this, 'settings_page']);
++        add_submenu_page('woocommerce', 'Validări Adrese (Safe)', 'Validări Adrese (Safe)', 'manage_woocommerce', 'wc-ro-validator-safe-log', [$this, 'log_page']);
++    }
++
++    public function register_settings() {
++        register_setting(
++            'wc_ro_validator_safe',
++            self::OPT_API_KEY,
++            [
++                'type' => 'string',
++                'sanitize_callback' => [$this, 'sanitize_api_key'],
++                'default' => '',
++            ]
++        );
++
++        register_setting(
++            'wc_ro_validator_safe',
++            self::OPT_LOGGING,
++            [
++                'type' => 'boolean',
++                'sanitize_callback' => 'rest_sanitize_boolean',
++                'default' => false,
++            ]
++        );
++    }
++
++    public function sanitize_api_key($value) {
++        return sanitize_text_field((string) $value);
++    }
++
++    public function settings_page() {
++        $api_key = (string) get_option(self::OPT_API_KEY, '');
++        ?>
++        <div class="wrap">
++            <h1>RO Validator (Safe)</h1>
++            <form method="post" action="options.php">
++                <?php settings_fields('wc_ro_validator_safe'); ?>
++                <table class="form-table">
++                    <tr>
++                        <th scope="row"><label for="<?php echo esc_attr(self::OPT_API_KEY); ?>">API Key InfoCUI</label></th>
++                        <td>
++                            <input type="text" id="<?php echo esc_attr(self::OPT_API_KEY); ?>" name="<?php echo esc_attr(self::OPT_API_KEY); ?>" value="<?php echo esc_attr($api_key); ?>" class="regular-text" />
++                            <p class="description">Cheia API din contul InfoCUI.ro.</p>
++                        </td>
++                    </tr>
++                    <tr>
++                        <th scope="row"><label for="<?php echo esc_attr(self::OPT_LOGGING); ?>">Logare probleme adresă</label></th>
++                        <td>
++                            <input type="checkbox" id="<?php echo esc_attr(self::OPT_LOGGING); ?>" name="<?php echo esc_attr(self::OPT_LOGGING); ?>" value="1" <?php checked(get_option(self::OPT_LOGGING), 1); ?> />
++                            <label for="<?php echo esc_attr(self::OPT_LOGGING); ?>">Înregistrează comenzile cu cod poștal lipsă/posibil invalid (nu blochează comanda)</label>
++                        </td>
++                    </tr>
++                </table>
++                <?php submit_button(); ?>
++            </form>
++        </div>
++        <?php
++    }
++
++    public function log_page() {
++        global $wpdb;
++        $orders = $wpdb->get_results("
++            SELECT p.ID, p.post_date, pm1.meta_value AS issue, pm2.meta_value AS email
++            FROM {$wpdb->posts} p
++            LEFT JOIN {$wpdb->postmeta} pm1 ON p.ID = pm1.post_id AND pm1.meta_key = '_wc_ro_safe_postal_issue'
++            LEFT JOIN {$wpdb->postmeta} pm2 ON p.ID = pm2.post_id AND pm2.meta_key = '_billing_email'
++            WHERE p.post_type = 'shop_order' AND pm1.meta_value IS NOT NULL
++            ORDER BY p.post_date DESC
++            LIMIT 200
++        ");
++        ?>
++        <div class="wrap">
++            <h1>Validări Adrese (Safe)</h1>
++            <table class="wp-list-table widefat fixed striped">
++                <thead><tr><th>Comandă</th><th>Data</th><th>Email</th><th>Problemă</th></tr></thead>
++                <tbody>
++                <?php if (empty($orders)) : ?>
++                    <tr><td colspan="4">Nu există comenzi cu probleme înregistrate.</td></tr>
++                <?php else : foreach ($orders as $o) : ?>
++                    <tr>
++                        <td><strong><a href="<?php echo esc_url(admin_url('post.php?post=' . $o->ID . '&action=edit')); ?>">#<?php echo esc_html($o->ID); ?></a></strong></td>
++                        <td><?php echo esc_html(date('d.m.Y H:i', strtotime($o->post_date))); ?></td>
++                        <td><?php echo esc_html($o->email); ?></td>
++                        <td><?php echo esc_html($o->issue); ?></td>
++                    </tr>
++                <?php endforeach; endif; ?>
++                </tbody>
++            </table>
++        </div>
++        <?php
++    }
++
++    public function checkout_fields($fields) {
++        $fields['billing']['billing_invoice_type'] = [
++            'type' => 'select',
++            'label' => 'Tip factură',
++            'required' => true,
++            'class' => ['form-row-wide'],
++            'options' => ['pf' => 'Persoană Fizică', 'pj' => 'Persoană Juridică (Companie)'],
++            'priority' => 25,
++        ];
++
++        $fields['billing']['billing_cui'] = [
++            'type' => 'text',
++            'label' => 'CUI / CIF',
++            'required' => false,
++            'class' => ['form-row-wide', 'wc-ro-safe-pj'],
++            'placeholder' => 'Ex: RO12345678',
++            'priority' => 26,
++        ];
++
++        if (isset($fields['billing']['billing_company'])) {
++            $fields['billing']['billing_company']['class'][] = 'wc-ro-safe-pj';
++            $fields['billing']['billing_company']['required'] = false;
++            $fields['billing']['billing_company']['priority'] = 27;
++        }
++
++        $fields['billing']['billing_reg_com'] = [
++            'type' => 'text',
++            'label' => 'Nr. Reg. Com.',
++            'required' => false,
++            'class' => ['form-row-wide', 'wc-ro-safe-pj'],
++            'priority' => 28,
++        ];
++
++        if (isset($fields['billing']['billing_postcode'])) {
++            $fields['billing']['billing_postcode']['type'] = 'select';
++            $fields['billing']['billing_postcode']['label'] = 'Cod poștal';
++            $fields['billing']['billing_postcode']['required'] = false;
++            $fields['billing']['billing_postcode']['options'] = ['' => 'Selectează codul poștal...'];
++        }
++
++        return $fields;
++    }
++
++    public function enqueue() {
++        if (!is_checkout()) return;
++
++        wp_enqueue_script('wc-ro-validator-safe', plugins_url('assets/js/validator.js', __FILE__), ['jquery'], '1.0.8', true);
++        wp_enqueue_style('wc-ro-validator-safe', plugins_url('assets/css/validator.css', __FILE__), [], '1.0.8');
++
++        wp_localize_script('wc-ro-validator-safe', 'WCRoSafe', [
++            'ajax_url' => admin_url('admin-ajax.php'),
++            'nonce' => wp_create_nonce('wc_ro_safe_nonce'),
++            'messages' => [
++                'loading' => 'Se încarcă...',
++                'select_city' => 'Selectează mai întâi localitatea',
++                'no_postal' => 'Nu s-au găsit coduri - introdu manual',
++                'api_error' => 'Nu am putut verifica acum (poți continua comanda)',
++                'cui_loading' => 'Se verifică CUI...',
++                'cui_invalid' => 'Nu am găsit firma pe acest CUI (poți continua comanda)',
++                'cui_valid' => 'Date companie încărcate',
++            ],
++        ]);
++    }
++
++    public function ajax_get_company() {
++        check_ajax_referer('wc_ro_safe_nonce', 'nonce');
++
++        $cui_raw = isset($_POST['cui']) ? sanitize_text_field(wp_unslash($_POST['cui'])) : '';
++        $cui = preg_replace('/[^0-9]/', '', $cui_raw);
++
++        if ($cui === '' || strlen($cui) < 4) {
++            wp_send_json_error(['message' => 'CUI invalid']);
++        }
++
++        $raw = $this->infocui_request(['cui' => $cui], 'data');
++        if ($raw === false) {
++            wp_send_json_error(['api_offline' => true, 'message' => 'API offline']);
++        }
++
++        $data = (isset($raw['data']) && is_array($raw['data'])) ? $raw['data'] : $raw;
++
++        $company = $this->pick($data, ['denumire','denumire_firma','company','name','firma','nume']);
++        $address = $this->pick($data, ['adresa','address','address_1','sediu']);
++        $regcom  = $this->pick($data, ['numar_reg_com','reg_com','nr_reg_com','registrul_comertului']);
++        $city    = $this->pick($data, ['localitate','city','oras']);
++        $county  = $this->pick($data, ['judet','county']);
++        $postal  = $this->pick($data, ['cod_postal','postal_code','zipcode','zip']);
++
++        if ($company !== '') {
++            wp_send_json_success([
++                'company' => $company,
++                'address' => $address,
++                'reg_com' => $regcom,
++                'city' => $city,
++                'county' => $county,
++                'postal_code' => $postal,
++            ]);
++        }
++
++        $msg = '';
++        if (isset($raw['message']) && is_string($raw['message'])) {
++            $msg = trim($raw['message']);
++            if (strtolower($msg) === 'company data') $msg = '';
++        }
++
++        wp_send_json_error(['message' => $msg ?: 'CUI negăsit în InfoCUI']);
++    }
++
++    public function ajax_get_postcodes() {
++        check_ajax_referer('wc_ro_safe_nonce', 'nonce');
++
++        $city_in  = isset($_POST['city']) ? sanitize_text_field(wp_unslash($_POST['city'])) : '';
++        $state_in = isset($_POST['state']) ? sanitize_text_field(wp_unslash($_POST['state'])) : '';
++        $addr1    = isset($_POST['addr1']) ? sanitize_text_field(wp_unslash($_POST['addr1'])) : '';
++        $addr2    = isset($_POST['addr2']) ? sanitize_text_field(wp_unslash($_POST['addr2'])) : '';
++
++        if ($city_in === '') {
++            wp_send_json_error(['message' => 'Localitatea este necesară']);
++        }
++
++        $city  = $this->normalize_ro($city_in);
++        $state = $this->normalize_ro($state_in);
++
++        $codes = [];
++
++        if ($addr1 !== '') {
++            $res = $this->infocui_request([
++                'county' => $state,
++                'city' => $city,
++                'location' => $addr1,
++                'unit' => $addr2,
++            ], 'cauta');
++            if ($res !== false) {
++                $codes = array_merge($codes, $this->extract_postcodes($res, $city_in));
++            }
++        }
++
++        if (empty($codes) && $state !== '') {
++            $list = $this->infocui_request(['judet' => $state], 'localitati');
++            if ($list !== false) {
++                $codes = array_merge($codes, $this->extract_postcodes_for_city($list, $city, $city_in));
++            }
++        }
++
++        if (empty($codes)) {
++            $list2 = $this->infocui_request(['nume' => $city, 'judet' => $state], 'localitati');
++            if ($list2 !== false) {
++                $codes = array_merge($codes, $this->extract_postcodes($list2, $city_in));
++            }
++        }
++
++        if ($codes === false) {
++            wp_send_json_success(['api_offline' => true, 'codes' => []]);
++        }
++
++        $uniq = [];
++        foreach ($codes as $c) {
++            if (!empty($c['code'])) $uniq[$c['code']] = $c;
++        }
++
++        wp_send_json_success([
++            'codes' => array_values($uniq),
++            'no_codes' => empty($uniq),
++        ]);
++    }
++
++    public function save_order_meta($order_id) {
++        if (isset($_POST['billing_invoice_type'])) update_post_meta($order_id, '_billing_invoice_type', sanitize_text_field(wp_unslash($_POST['billing_invoice_type'])));
++        if (isset($_POST['billing_cui'])) update_post_meta($order_id, '_billing_cui', sanitize_text_field(wp_unslash($_POST['billing_cui'])));
++        if (isset($_POST['billing_reg_com'])) update_post_meta($order_id, '_billing_reg_com', sanitize_text_field(wp_unslash($_POST['billing_reg_com'])));
++    }
++
++    public function log_validation_issues($order_id, $posted_data, $order) {
++        if (!get_option(self::OPT_LOGGING)) return;
++
++        $city   = isset($posted_data['billing_city']) ? (string) $posted_data['billing_city'] : '';
++        $state  = isset($posted_data['billing_state']) ? (string) $posted_data['billing_state'] : '';
++        $postal = isset($posted_data['billing_postcode']) ? (string) $posted_data['billing_postcode'] : '';
++
++        if ($city === '') return;
++
++        if ($postal === '') {
++            update_post_meta($order_id, '_wc_ro_safe_postal_issue', 'Cod poștal lipsă pentru ' . $city . ' (' . $state . ')');
++            return;
++        }
++
++        $ok = $this->infocui_request(['cod' => $postal], 'codpostal');
++        if ($ok === false) return; // nu blocăm
++
++        $data = $this->unwrap($ok);
++        if (empty($data)) {
++            update_post_meta($order_id, '_wc_ro_safe_postal_issue', 'Cod poștal posibil invalid: ' . $postal . ' pentru ' . $city . ' (' . $state . ')');
++        }
++    }
++
++    private function pick($arr, $keys) {
++        if (!is_array($arr)) return '';
++        foreach ($keys as $k) {
++            if (isset($arr[$k]) && is_scalar($arr[$k]) && trim((string)$arr[$k]) !== '') {
++                return (string)$arr[$k];
++            }
++        }
++        return '';
++    }
++
++    private function normalize_ro($s) {
++        $s = trim((string)$s);
++        $map = ['ă'=>'a','â'=>'a','î'=>'i','ș'=>'s','ş'=>'s','ț'=>'t','ţ'=>'t','Ă'=>'A','Â'=>'A','Î'=>'I','Ș'=>'S','Ş'=>'S','Ț'=>'T','Ţ'=>'T'];
++        return strtr($s, $map);
++    }
++
++    private function infocui_request(array $params, string $endpoint) {
++        $key = (string) get_option(self::OPT_API_KEY, '');
++        if ($key === '') return false;
++
++        $params = array_filter($params, function($v){ return $v !== '' && $v !== null; });
++        $url = add_query_arg(array_merge(['key' => $key], $params), $this->api_base . ltrim($endpoint, '/'));
++
++        $resp = wp_remote_get($url, ['timeout' => 7]);
++        if (is_wp_error($resp)) return false;
++
++        $body = wp_remote_retrieve_body($resp);
++        $json = json_decode($body, true);
++        if ($json === null && trim($body) !== '') return false;
++
++        return $json;
++    }
++
++    private function unwrap($raw) {
++        if (!is_array($raw)) return [];
++        if (isset($raw['data']) && is_array($raw['data'])) return $raw['data'];
++        if (isset($raw['rezultate']) && is_array($raw['rezultate'])) return $raw['rezultate'];
++        return $raw;
++    }
++
++    private function extract_postcodes($raw, $label_city) {
++        $codes = [];
++        $data = $this->unwrap($raw);
++        if (!is_array($data)) return $codes;
++
++        $rows = $data;
++        $is_assoc = array_keys($data) !== range(0, count($data) - 1);
++        if ($is_assoc) $rows = [$data];
++
++        foreach ($rows as $row) {
++            if (!is_array($row)) continue;
++            $cp = $this->pick($row, ['cod_postal','codpostal','zipcode','zip']);
++            if ($cp === '') continue;
++            $name = $this->pick($row, ['nume','localitate','city']);
++            $label = $cp . ' - ' . ($name !== '' ? $name : $label_city);
++            $codes[] = ['code' => $cp, 'label' => $label];
++        }
++
++        return $codes;
++    }
++
++    private function extract_postcodes_for_city($raw, $city_norm, $label_city) {
++        $codes = [];
++        $data = $this->unwrap($raw);
++        if (!is_array($data)) return $codes;
++
++        $rows = $data;
++        $is_assoc = array_keys($data) !== range(0, count($data) - 1);
++        if ($is_assoc) $rows = [$data];
++
++        foreach ($rows as $row) {
++            if (!is_array($row)) continue;
++            $name = $this->pick($row, ['nume','localitate','city']);
++            if ($name === '') continue;
++            if ($this->normalize_ro($name) !== $city_norm) continue;
++            $codes = array_merge($codes, $this->extract_postcodes($row, $label_city));
++        }
++
++        return $codes;
++    }
++}
++
++add_action('plugins_loaded', function(){
++    if (class_exists('WooCommerce')) new WC_RO_Validator_Safe();
++});
