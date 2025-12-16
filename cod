@@ -1,0 +1,105 @@
+<?php
+/**
+ * Plugin Name: WooCommerce RO Validator SAFE
+ * Description: Facturare PF / PJ cu InfoCUI (fără CNP). NU blochează checkout-ul.
+ * Version: 1.0.0
+ */
+
+if (!defined('ABSPATH')) exit;
+
+class WC_RO_Validator_SAFE {
+
+    const OPT_API_KEY = 'wc_ro_validator_api_key';
+
+    public function __construct() {
+        add_filter('woocommerce_checkout_fields', [$this,'fields']);
+        add_action('woocommerce_checkout_update_order_meta', [$this,'save_meta']);
+        add_action('wp_ajax_wc_ro_get_company', [$this,'get_company']);
+        add_action('wp_ajax_nopriv_wc_ro_get_company', [$this,'get_company']);
+        add_action('wp_enqueue_scripts', [$this,'scripts']);
+    }
+
+    /** CAMPURI CHECKOUT */
+    public function fields($fields) {
+
+        $fields['billing']['billing_invoice_type'] = [
+            'type' => 'select',
+            'label' => 'Tip factură',
+            'required' => true,
+            'options' => [
+                'pf' => 'Persoană Fizică',
+                'pj' => 'Persoană Juridică'
+            ],
+            'priority' => 25,
+        ];
+
+        $fields['billing']['billing_cui'] = [
+            'type' => 'text',
+            'label' => 'CUI / CIF',
+            'required' => false,
+            'priority' => 26,
+        ];
+
+        return $fields;
+    }
+
+    /** SALVARE META */
+    public function save_meta($order_id) {
+        if (isset($_POST['billing_invoice_type'])) {
+            update_post_meta($order_id, '_billing_invoice_type', sanitize_text_field($_POST['billing_invoice_type']));
+        }
+        if (isset($_POST['billing_cui'])) {
+            update_post_meta($order_id, '_billing_cui', sanitize_text_field($_POST['billing_cui']));
+        }
+    }
+
+    /** JS MINIM, FARA LOOP */
+    public function scripts() {
+        if (!is_checkout()) return;
+
+        wp_add_inline_script('jquery', "
+            jQuery(function($){
+                $('#billing_cui').on('blur', function(){
+                    let cui = $(this).val().replace(/[^0-9]/g,'');
+                    if (cui.length < 4) return;
+
+                    $.post('".admin_url('admin-ajax.php')."',{
+                        action:'wc_ro_get_company',
+                        cui:cui
+                    });
+                });
+            });
+        ");
+    }
+
+    /** INFOCUI */
+    public function get_company() {
+
+        $cui = preg_replace('/[^0-9]/','',$_POST['cui'] ?? '');
+        if (strlen($cui) < 4) wp_die();
+
+        $key = get_option(self::OPT_API_KEY,'');
+        if (!$key) wp_die();
+
+        $url = 'https://www.infocui.ro/system/api/data?key='.$key.'&cui='.$cui;
+        $res = wp_remote_get($url,['timeout'=>5]);
+
+        if (is_wp_error($res)) wp_die();
+
+        $json = json_decode(wp_remote_retrieve_body($res), true);
+
+        // IMPORTANT: datele sunt in data
+        if (isset($json['data'])) {
+            wp_send_json_success($json['data']);
+        }
+
+        wp_send_json_error();
+    }
+}
+
+add_action('plugins_loaded', function(){
+    if (class_exists('WooCommerce')) {
+        new WC_RO_Validator_SAFE();
+    }
+});
+
