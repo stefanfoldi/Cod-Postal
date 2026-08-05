@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce RO Validator (Safe)
  * Description: PF/PJ (fără CNP), preluare date firmă din InfoCUI, sugestii cod poștal (fără blocarea comenzii) + log comenzi cu probleme.
- * Version: 1.1.4
+ * Version: 1.1.5
  * Author: Programare
  * Text Domain: wc-ro-validator-safe
  * Requires PHP: 7.0
@@ -174,8 +174,8 @@ final class WC_RO_Validator_Safe_114 {
         $js = plugins_url('assets/js/validator.js', __FILE__);
         $css = plugins_url('assets/css/validator.css', __FILE__);
 
-        wp_enqueue_script('wc-ro-validator-safe', $js, array('jquery'), '1.1.4', true);
-        wp_enqueue_style('wc-ro-validator-safe', $css, array(), '1.1.4');
+        wp_enqueue_script('wc-ro-validator-safe', $js, array('jquery'), '1.1.5', true);
+        wp_enqueue_style('wc-ro-validator-safe', $css, array(), '1.1.5');
 
         wp_localize_script('wc-ro-validator-safe', 'WCRoSafe', array(
             'ajax_url' => admin_url('admin-ajax.php'),
