@@ -1,0 +1,18 @@
+.wc-ro-safe-notice {
+    display: block;
+    margin-top: 0.35rem;
+    font-size: 0.875rem;
+    line-height: 1.4;
+}
+
+.wc-ro-safe-notice.is-loading {
+    color: #646970;
+}
+
+.wc-ro-safe-notice.is-success {
+    color: #008a20;
+}
+
+.wc-ro-safe-notice.is-error {
+    color: #b32d2e;
+}
