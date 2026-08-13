@@ -1,4 +1,4 @@
-name: PHP Composer
+name: Lint
 
 on:
   push:
@@ -10,30 +10,33 @@ permissions:
   contents: read
 
 jobs:
-  build:
-
+  php:
+    name: PHP syntax (${{ matrix.php }})
     runs-on: ubuntu-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        php: [ '7.4', '8.2' ]
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Validate composer.json and composer.lock
-      run: composer validate --strict
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
 
-    - name: Cache Composer packages
-      id: composer-cache
-      uses: actions/cache@v3
-      with:
-        path: vendor
-        key: ${{ runner.os }}-php-${{ hashFiles('**/composer.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-php-
+      - name: Lint PHP files
+        run: find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 -P4 php -l
 
-    - name: Install dependencies
-      run: composer install --prefer-dist --no-progress
+  js:
+    name: JavaScript syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-    # Add a test script to composer.json, for instance: "test": "vendor/bin/phpunit"
-    # Docs: https://getcomposer.org/doc/articles/scripts.md
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-    # - name: Run test suite
-    #   run: composer run-script test
+      - name: Check JS files
+        run: find assets/js -name '*.js' -print0 | xargs -0 -n1 node --check
